@@ -11,11 +11,18 @@ from util.client_write_file import write_file
 from util.client_finish_file import finish_file
 import uuid
 
-
+def is_ws_alive(ws):
+    if ws is None:
+        return False
+    try:
+        # 尝试调用新的属性，如果报错就试旧的，再报错就默认为 False
+        return getattr(ws, 'open', not getattr(ws, 'closed', False))
+    except:
+        return False
 
 async def send_message(message):
     # 发送数据
-    if Cosmic.websocket is None or Cosmic.websocket.closed:
+    if not is_ws_alive(Cosmic.websocket):
         if message['is_final']:
             Cosmic.audio_files.pop(message['task_id'])
             console.print('    服务端未连接，无法发送\n')

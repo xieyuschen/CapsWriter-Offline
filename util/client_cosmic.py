@@ -4,11 +4,14 @@ import sounddevice as sd
 import sys
 from pathlib import Path
 from typing import List, Union
+from io import StringIO
 
 from rich.console import Console 
 from rich.theme import Theme
 my_theme = Theme({'markdown.code':'cyan', 'markdown.item.number':'yellow'})
-console = Console(highlight=False, soft_wrap=False, theme=my_theme)
+# console = Console(highlight=False, soft_wrap=False, theme=my_theme)
+# hide console when press key under tray mode
+console = Console(file=StringIO(), force_terminal=False)
 
 
 class Cosmic:

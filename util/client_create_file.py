@@ -30,7 +30,7 @@ def create_file(channels: int, time_start: float) -> Tuple[Path, Union[Popen, Wa
             '-b:a', '192k', file_path,
         ]
         # 执行ffmpeg命令行，得到 Popen
-        file = Popen(ffmpeg_command, stdin=PIPE, stdout=DEVNULL, stderr=DEVNULL)
+        file = Popen(ffmpeg_command, stdin=PIPE, stdout=DEVNULL, stderr=DEVNULL, creationflags=0x08000000)
     else:                       # 用户未安装 ffmpeg，则输出为 wav 格式
         file_path = file_path.with_suffix('.wav')
         file = wave.open(str(file_path), 'w')

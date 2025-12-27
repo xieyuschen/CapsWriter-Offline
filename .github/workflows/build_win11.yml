@@ -1,0 +1,55 @@
+name: Build and Release for Windows 11
+
+on:
+  push:
+    tags:
+      - "v*" 
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10' 
+        architecture: 'x64'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-client.txt
+
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller ./build-client.spec
+
+
+    # ${{ github.ref_name }}
+    - name: Zip the Build
+      run: |
+        $VersionName = "${{ github.ref_name }}"
+        $ZipName = "CapsWriter-Client-Windows-$VersionName.zip"
+        Compress-Archive -Path dist/CapsWriter-Offline-Client/* -DestinationPath "dist/$ZipName"
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CapsWriter-Client-Windows-${{ github.ref_name }}
+        path: dist/*.zip
+
+    # 【修改点 3】Release 上传 dist 下所有的 zip 文件
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/*.zip
+        draft: false
+        prerelease: false
+        generate_release_notes: true

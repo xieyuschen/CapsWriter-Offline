@@ -4,11 +4,10 @@ import os
 import sys
 import asyncio
 import signal
+import threading  # <--- 新增
 from pathlib import Path
 from platform import system
 from typing import List
-
-
 
 import typer
 import colorama
@@ -17,7 +16,8 @@ import keyboard
 from config import ClientConfig as Config
 from util.client_cosmic import console, Cosmic
 from util.client_stream import stream_open, stream_close
-from util.client_shortcut_handler import bond_shortcut
+# <--- 修改导入，增加 start_tray
+from util.client_shortcut_handler import bond_shortcut, start_tray 
 from util.client_recv_result import recv_result
 from util.client_show_tips import show_mic_tips, show_file_tips
 from util.client_hot_update import update_hot_all, observe_hot
@@ -43,7 +43,6 @@ if system() == 'Darwin' and not sys.argv[1:]:
 
 
 async def main_mic():
-    Cosmic.loop = asyncio.get_event_loop()
     Cosmic.queue_in = asyncio.Queue()
     Cosmic.queue_out = asyncio.Queue()
 
@@ -59,7 +58,8 @@ async def main_mic():
     Cosmic.stream = stream_open()
 
     # Ctrl-C 关闭音频流，触发自动重启
-    signal.signal(signal.SIGINT, stream_close)
+    # 托盘话，关闭没有作用了移除掉
+    # signal.signal(signal.SIGINT, stream_close)
 
     # 绑定按键
     bond_shortcut()
@@ -93,12 +93,19 @@ async def main_file(files: List[Path]):
 
 def init_mic():
     try:
-        asyncio.run(main_mic())
-    except KeyboardInterrupt:
-        console.print(f'再见！')
-    finally:
-        print('...')
-
+        # 1. 为当前子线程创建唯一的循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # 2. 立即赋值给全局变量，确保 handler 能找到它
+        Cosmic.loop = loop
+        
+        # 3. 运行主逻辑（直到被关闭）
+        loop.run_until_complete(main_mic())
+    except Exception as e:
+        with open('error_log.txt', 'a', encoding='utf-8') as f:
+            import traceback
+            f.write(traceback.format_exc())
 
 def init_file(files: List[Path]):
     """
@@ -112,9 +119,38 @@ def init_file(files: List[Path]):
 
 
 if __name__ == "__main__":
-    # 如果参数传入文件，那就转录文件
-    # 如果没有多余参数，就从麦克风输入
-    if sys.argv[1:]:
-        typer.run(init_file)
-    else:
-        init_mic()
+    # === 新增：全局错误捕获，专治无界面启动失败 ===
+    try:
+        # 如果参数传入文件，那就转录文件
+        if sys.argv[1:]:
+            typer.run(init_file)
+        else:
+            # === 托盘模式启动 ===
+            
+            # 1. 启动业务子线程 (运行 init_mic)
+            t = threading.Thread(target=init_mic, daemon=True)
+            t.start()
+            
+            # 2. 启动托盘 (阻塞主线程)
+            # 这一步最容易出问题，比如 PIL 加载失败
+            print("正在启动托盘...")
+            start_tray()
+            
+    except Exception as e:
+        # 无论发生什么错误（缺少依赖、图片生成失败等），都记录下来
+        import traceback
+        error_msg = traceback.format_exc()
+        
+        # 写入 crash_log.txt
+        with open('crash_log.txt', 'w', encoding='utf-8') as f:
+            f.write(error_msg)
+            
+        # 甚至可以弹窗提示 (如果 tkinter 可用)
+        try:
+            import tkinter.messagebox
+            import tkinter
+            root = tkinter.Tk()
+            root.withdraw()
+            tkinter.messagebox.showerror("启动失败", f"程序遇到错误：\n{e}\n请查看 crash_log.txt")
+        except:
+            pass

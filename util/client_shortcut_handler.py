@@ -9,6 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from util.client_send_audio import send_audio
 from util.my_status import Status
 
+# === 新增导入 ===
+import sys
+import os
+from PIL import Image, ImageDraw
+import pystray
 
 task = asyncio.Future()
 status = Status('开始录音', spinner='point')
@@ -17,13 +22,38 @@ pressed = False
 released = True
 event = Event()
 
+# === 托盘图标相关逻辑 ===
+
+def create_image(width, height, color_bg, color_fg):
+    image = Image.new('RGB', (width, height), color_bg)
+    dc = ImageDraw.Draw(image)
+    # 画一个圆点
+    dc.ellipse((width // 4, height // 4, 3 * width // 4, 3 * height // 4), fill=color_fg)
+    return image
+
+# 预先生成两种图标状态
+icon_default = create_image(64, 64, 'black', 'white') # 待机：白点
+icon_recording = create_image(64, 64, 'black', 'red') # 录音：红点
+
+# 全局托盘变量
+tray_icon = None
+
+def on_exit(icon, item):
+    """点击托盘退出菜单时的回调"""
+    icon.stop()
+    # 强制退出整个进程，因为还有一个子线程在跑
+    os._exit(0)
+
+def start_tray():
+    """供主程序调用的启动函数"""
+    global tray_icon
+    menu = (pystray.MenuItem('退出', on_exit),)
+    tray_icon = pystray.Icon("CapsWriter", icon_default, "CapsWriter Client", menu)
+    tray_icon.run()
+
+# =======================
 
 def shortcut_correct(e: keyboard.KeyboardEvent):
-    # 在我的 Windows 电脑上，left ctrl 和 right ctrl 的 keycode 都是一样的，
-    # keyboard 库按 keycode 判断触发
-    # 即便设置 right ctrl 触发，在按下 left ctrl 时也会触发
-    # 不过，虽然两个按键的 keycode 一样，但事件 e.name 是不一样的
-    # 在这里加一个判断，如果 e.name 不是我们期待的按键，就返回
     key_expect = keyboard.normalize_name(Config.shortcut).replace('left ', '')
     key_actual = e.name.replace('left ', '')
     if key_expect != key_actual: return False
@@ -46,7 +76,13 @@ def launch_task():
     Cosmic.on = t1
 
     # 打印动画：正在录音
-    status.start()
+    # status.start()
+    
+    # === 图标变红 ===
+    if tray_icon: 
+        tray_icon.icon = icon_recording
+        time.sleep(0.1)
+
 
     # 启动识别任务
     task = asyncio.run_coroutine_threadsafe(
@@ -56,9 +92,16 @@ def launch_task():
 
 
 def cancel_task():
+    if Cosmic.on and (time.time() - Cosmic.on < 0.3):
+        return
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    status.stop()
+    # status.stop()
+    
+    # === 图标变白 ===
+    if tray_icon:
+        tray_icon.icon = icon_default
+        time.sleep(0.1)
 
     # 取消协程任务
     task.cancel()
@@ -66,10 +109,18 @@ def cancel_task():
 
 def finish_task():
     global task
-
+# === 核心保护逻辑：如果录音开启到现在还不满 1 秒，拒绝关闭 ===
+    # 这能防止第一次点击的“松开”动作瞬间把刚开启的录音给关了
+    if Cosmic.on and (time.time() - Cosmic.on < 1):
+        return
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    status.stop()
+    # status.stop()
+
+    # === 图标变白 ===
+    if tray_icon:
+        tray_icon.icon = icon_default
+        time.sleep(0.1)
 
     # 通知结束任务
     asyncio.run_coroutine_threadsafe(
@@ -94,31 +145,20 @@ def count_down(e: Event):
 
 def manage_task(e: Event):
     """
-    通过检测 e 是否在 threshold 时间内被触发，判断是单击，还是长按
-    进行下一步的动作
+    极简逻辑：只负责开关切换
     """
+    # 1. 记录按下时的状态快照
+    was_running = Cosmic.on
 
-    # 记录是否有任务
-    on = Cosmic.on
-
-    # 先运行任务
-    if not on:
+    if not was_running:
+        # 如果没在录音，启动它
         launch_task()
-
-    # 及时松开按键了，是单击
-    if e.wait(timeout=Config.threshold * 0.8):
-        # 如果有任务在运行，就结束任务
-        if Cosmic.on and on:
-            finish_task()
-
-    # 没有及时松开按键，是长按
     else:
-        # 就取消本栈启动的任务
-        if not on:
-            cancel_task()
+        # 如果正在录音，停止它
+        finish_task()
 
-        # 长按，发送按键
-        keyboard.send(Config.shortcut)
+    # 2. 直接等待松开，不做任何超时判断，也不发送模拟按键
+    e.wait()
 
 
 def click_mode(e: keyboard.KeyboardEvent):
