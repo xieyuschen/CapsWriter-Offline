@@ -1,5 +1,4 @@
 import time
-import sherpa_onnx
 from multiprocessing import Queue
 import signal
 from platform import system
@@ -35,14 +34,14 @@ def init_recognizer(queue_in: Queue, queue_out: Queue, sockets_id):
     recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
         **{key: value for key, value in ParaformerArgs.__dict__.items() if not key.startswith('_')}
     )
-    console.print(f'[green4]语音模型载入完成', end='\n\n')
+    console.print('[green4]语音模型载入完成', end='\n\n')
 
     # 载入标点模型
     punc_model = None
     if Config.format_punc:
         console.print('[yellow]标点模型载入中', end='\r')
         punc_model = CT_Transformer(ModelPaths.punc_model_dir, quantize=True)
-        console.print(f'[green4]标点模型载入完成', end='\n\n')
+        console.print('[green4]标点模型载入完成', end='\n\n')
 
     console.print(f'模型加载耗时 {time.time() - t1 :.2f}s', end='\n\n')
 
@@ -60,9 +59,11 @@ def init_recognizer(queue_in: Queue, queue_out: Queue, sockets_id):
         except:
             continue
 
+        if task is None:
+            return
+
         if task.socket_id not in sockets_id:    # 检查任务所属的连接是否存活
             continue
 
         result = recognize(recognizer, punc_model, task)   # 执行识别
         queue_out.put(result)      # 返回结果
-

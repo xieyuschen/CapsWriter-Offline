@@ -1,22 +1,28 @@
-import asyncio
 import json
 
-import keyboard
-import websockets
+from websockets.exceptions import ConnectionClosed
 from config import ClientConfig as Config
 from util.client_cosmic import Cosmic, console
 from util.client_check_websocket import check_websocket
+from util.app_status import AppState, app_status
 from util.client_hot_sub import hot_sub
 from util.client_rename_audio import rename_audio
 from util.client_strip_punc import strip_punc
 from util.client_write_md import write_md
 from util.client_type_result import type_result
+from util.client_shortcut_handler import shortcut_instruction
 
 
-async def recv_result():
+async def recv_result(stop_event=None):
     if not await check_websocket():
+        if stop_event is None or not stop_event.is_set():
+            app_status.set(AppState.DISCONNECTED)
         return
     console.print('[green]连接成功\n')
+    app_status.set(
+        AppState.READY,
+        f"客户端和服务端已就绪；{shortcut_instruction()}",
+    )
     try:
         while True:
             # 接收消息
@@ -49,12 +55,16 @@ async def recv_result():
             console.print(f'    转录时延：{delay:.2f}s')
             console.print(f'    识别结果：[green]{text}')
             console.line()
+            app_status.set(
+                AppState.READY,
+                f"识别完成，文字已输入；{shortcut_instruction()}",
+            )
 
-    except websockets.ConnectionClosedError:
+    except ConnectionClosed:
         console.print('[red]连接断开\n')
-    except websockets.ConnectionClosedOK:
-        console.print('[red]连接断开\n')
-    except Exception as e:
-        print(e)
+    except Exception as exc:
+        print(exc)
     finally:
+        if stop_event is None or not stop_event.is_set():
+            app_status.set(AppState.DISCONNECTED)
         return

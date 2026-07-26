@@ -6,6 +6,14 @@ from rich.markdown import Markdown
 
 
 def show_mic_tips():
+    if Config.hold_mode:
+        shortcut_usage = (
+            f"按住 `{Config.shortcut}` 键开始录音，松开后结束并识别"
+        )
+    else:
+        shortcut_usage = (
+            f"按一下 `{Config.shortcut}` 键开始录音，再按一下结束并识别"
+        )
     console.rule('[bold #d55252]CapsWriter Offline Client')
     # console.print(f'\n项目地址：[cyan underline]https://github.com/HaujetZhao/CapsWriter-Offline', end='\n\n')
     markdown = (f'''
@@ -18,7 +26,7 @@ def show_mic_tips():
 
 1. 运行 Server 端，它会载入语音和标点模型（共占用约 2GB 的内存）
 2. 运行 Client 端，它会打开系统默认麦克风（Ctrl+C 可重载麦克风）
-3. 按住 `{Config.shortcut}` 键，录音开始，松开 `{Config.shortcut}` 键，录音结束，识别结果立刻被输入
+3. {shortcut_usage}，识别结果会自动输入
 4. 将音视频文件拖动到 Client 端打开，可以转录生成字幕
 
 

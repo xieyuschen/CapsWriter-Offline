@@ -1,8 +1,10 @@
 rich
+colorama
 keyboard
 pyclip
 numpy
-sounddevice
+# Keep the PortAudio DLL used by the known-good Windows client release.
+sounddevice==0.5.3
 websockets
 pypinyin
 watchdog

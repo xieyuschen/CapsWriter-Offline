@@ -18,10 +18,8 @@ class ClientConfig:
     port = '6016'               # Server 端口
 
     shortcut     = 'caps lock'  # 控制录音的快捷键，默认是 CapsLock
-    hold_mode    = True         # 长按模式，按下录音，松开停止，像对讲机一样用。
-                                # 改为 False，则关闭长按模式，也就是单击模式
-                                #       即：单击录音，再次单击停止
-                                #       且：长按会执行原本的单击功能
+    hold_mode    = False        # False：单击开始，再次单击停止（本分支默认）
+                                # True：按住录音，松开停止，像对讲机一样用
     suppress     = False        # 是否阻塞按键事件（让其它程序收不到这个按键消息）
     restore_key  = True         # 录音完成，松开按键后，是否自动再按一遍，以恢复 CapsLock 或 Shift 等按键之前的状态
     threshold    = 0.3          # 按下快捷键后，触发语音识别的时间阈值
@@ -30,6 +28,7 @@ class ClientConfig:
 
     save_audio = True           # 是否保存录音文件
     audio_name_len = 20         # 将录音识别结果的前多少个字存储到录音文件名中，建议不要超过200
+    mic_device = None           # 默认使用系统麦克风；也可填写设备编号或名称的一部分
 
     trash_punc = '，。,.'        # 识别结果要消除的末尾标点
 
@@ -63,5 +62,3 @@ class ParaformerArgs:
     feature_dim = 80
     decoding_method = 'greedy_search'
     debug = False
-
-
