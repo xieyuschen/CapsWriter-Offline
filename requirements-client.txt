@@ -1,15 +1,33 @@
+# basic and cli
 rich
-colorama
-keyboard
-pyclip
-numpy
-# Keep the PortAudio DLL used by the known-good Windows client release.
-sounddevice==0.5.3
-websockets
-pypinyin
-watchdog
 typer
+colorama
+markdown
+
+# system, input, hardware
+keyboard
+pynput
+pyclip
+sounddevice
+watchdog
+
+# network and api 
+websockets
+openai
+ollama
+httpx
+
+# data process
+numpy
+numba
+pypinyin
 srt
-pyinstaller
+rapidfuzz
+
+# tray and image
 pystray
 Pillow
+tkhtmlview
+
+# build
+pyinstaller

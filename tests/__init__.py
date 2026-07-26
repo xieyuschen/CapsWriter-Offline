@@ -1,1 +1,0 @@
-"""CapsWriter tests."""

@@ -1,25 +1,51 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build for the unified client + server tray application."""
+"""PyInstaller：将 Client、Server 与托盘打包为一个 CapsWriter.exe。"""
 
 from os import makedirs, walk
 from os.path import basename, dirname, exists, join
-from pathlib import Path
 from shutil import copyfile
 
-from PyInstaller.utils.hooks import collect_all, get_package_paths
+from PyInstaller.utils.hooks import collect_all
 
 
 binaries = []
-hiddenimports = []
 datas = []
+hiddenimports = [
+    "websockets",
+    "websockets.client",
+    "websockets.server",
+    "rich",
+    "rich.console",
+    "rich.markdown",
+    "rich._unicode_data.unicode17-0-0",
+    "keyboard",
+    "pynput",
+    "pyclip",
+    "numpy",
+    "numba",
+    "sounddevice",
+    "pypinyin",
+    "watchdog",
+    "typer",
+    "srt",
+    "rapidfuzz",
+    "sherpa_onnx",
+    "gguf",
+    "PIL",
+    "PIL.Image",
+    "pystray",
+]
 
-# onnxruntime ships native providers that aren't always discovered from the
-# lazy imports in the recognition process.
-# Keep the native providers. Importing every onnxruntime tool as a hidden
-# module would pull unrelated quantization and transformer utilities into the
-# desktop build.
-_onnx_data, onnx_binaries, _onnx_hiddenimports = collect_all("onnxruntime")
-binaries += onnx_binaries
+# 模型后端和托盘均包含延迟加载的本地库，显式收集能避免开发机可用、
+# 冻结后缺 DLL 的情况。
+for package in ("sherpa_onnx", "onnxruntime", "gguf", "PIL"):
+    try:
+        package_datas, package_binaries, package_hiddenimports = collect_all(package)
+        datas += package_datas
+        binaries += package_binaries
+        hiddenimports += package_hiddenimports
+    except Exception as exc:
+        print(f"[WARN] 无法显式收集 {package}: {exc}")
 
 analysis = Analysis(
     ["start_capswriter.py"],
@@ -37,32 +63,49 @@ analysis = Analysis(
         "PyQt5",
         "matplotlib",
         "wx",
+        "funasr",
+        "pydantic",
         "torch",
     ],
-    noarchive=False,
+    noarchive=True,
 )
 
-# Locate sherpa's compatible native library. PyInstaller may flatten funasr's
-# older copy with the same filename to the application root.
-_package_root, sherpa_package_dir = get_package_paths("sherpa_onnx")
-sherpa_library_dir = Path(sherpa_package_dir) / "lib"
+# 排除开发机 CUDA 文件；DirectML 保留，作为上游支持的 Windows GPU 后端。
+filtered_binaries = []
+for name, source, binary_type in analysis.binaries:
+    source_lower = source.lower() if isinstance(source, str) else ""
+    is_system_cuda = (
+        "\\nvidia gpu computing toolkit\\cuda\\" in source_lower
+        or "\\nvidia\\cudnn\\" in source_lower
+        or ("\\cuda\\v" in source_lower and "\\bin\\" in source_lower)
+    )
+    is_cuda_provider = "onnxruntime_providers_cuda.dll" in name.lower()
+    if not is_system_cuda and not is_cuda_provider:
+        filtered_binaries.append((name, source, binary_type))
+analysis.binaries = filtered_binaries
 
-# Keep application modules outside the archive so config.py and hot-word files
-# remain editable in the packaged folder, matching the project's existing
-# distribution format.
-private_modules = ["util", "config", "core_server", "core_client"]
-pure_modules = analysis.pure.copy()
-analysis.pure.clear()
-for name, source, module_type in pure_modules:
-    is_private = any(
-        name == module or name.startswith(module + ".")
+# 配置和 core 源码保留在发行目录，方便用户直接编辑并跟随上游结构。
+private_modules = ["core", "config_client", "config_server", "LLM"]
+analysis.pure = [
+    entry
+    for entry in analysis.pure
+    if not any(
+        entry[0] == module or entry[0].startswith(module + ".")
         for module in private_modules
     )
-    if not is_private:
-        analysis.pure.append((name, source, module_type))
+]
+analysis.datas = [
+    entry
+    for entry in analysis.datas
+    if not any(
+        entry[0].startswith(module + "/")
+        or entry[0].startswith(module + "\\")
+        or entry[0] in (module + ".py", module + ".pyc")
+        for module in private_modules
+    )
+]
 
 pyz = PYZ(analysis.pure)
-
 exe = EXE(
     pyz,
     analysis.scripts,
@@ -94,32 +137,20 @@ collection = COLLECT(
 )
 
 extra_files = [
-    "config.py",
-    "core_server.py",
-    "core_client.py",
-    "hot-en.txt",
-    "hot-zh.txt",
+    "config_client.py",
+    "config_server.py",
+    "hot.txt",
+    "hot-server.txt",
     "hot-rule.txt",
-    "keywords.txt",
     "readme.md",
+    "LICENSE",
 ]
-extra_folders = ["assets", "util"]
+extra_folders = ["assets", "core", "LLM", "docs"]
 destination_root = join("dist", basename(collection.name))
 
-# Replace the flattened conflicting library after COLLECT resolves symlinks.
-# Without this, the frozen model child fails with an undefined Whisper feature
-# symbol even though the same dependencies work when run from source.
-internal_directory = Path(destination_root) / "internal"
-if sherpa_library_dir.is_dir():
-    for sherpa_copy in sherpa_library_dir.iterdir():
-        if "kaldi-native-fbank-core" not in sherpa_copy.name.lower():
-            continue
-        flattened_copy = internal_directory / sherpa_copy.name
-        if flattened_copy.exists() or flattened_copy.is_symlink():
-            flattened_copy.unlink()
-        copyfile(sherpa_copy, flattened_copy)
-
 for folder in extra_folders:
+    if not exists(folder):
+        continue
     for directory, _subdirectories, filenames in walk(folder):
         for filename in filenames:
             if filename.endswith((".pyc", ".pyo")) or "__pycache__" in directory:
@@ -133,13 +164,12 @@ for source in extra_files:
     makedirs(dirname(destination), exist_ok=True)
     copyfile(source, destination)
 
-# Models remain a separate download because they are over 1 GB. Creating the
-# directory in every build makes the expected destination unambiguous.
+# 模型单独下载；发行包只创建明确的目标目录和说明。
 models_directory = join(destination_root, "models")
 makedirs(models_directory, exist_ok=True)
 model_note = join(models_directory, "请将模型文件放在此目录.txt")
-with open(model_note, "w", encoding="utf-8") as file:
-    file.write(
-        "需要 paraformer-offline-zh 和 punc_ct-transformer_cn-en 两个模型目录。\n"
-        "详见上一级 readme.md。\n"
+with open(model_note, "w", encoding="utf-8") as note:
+    note.write(
+        "模型下载与目录结构见 readme.md，或访问：\n"
+        "https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models\n"
     )

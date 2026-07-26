@@ -1,73 +1,83 @@
-name: Build and Release for Windows 11
+name: Build Windows App
 
 on:
+  pull_request:
+  workflow_dispatch:
   push:
     tags:
-      - "v*" 
-  workflow_dispatch:
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10' 
-        architecture: 'x64'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: "x64"
 
-    - name: Install client and server dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-    - name: Build unified application with PyInstaller
-      run: |
-        pyinstaller ./build.spec
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
 
-    - name: Verify packaged application layout
-      run: |
-        $RequiredFiles = @(
-          "dist/CapsWriter-Offline/CapsWriter.exe",
-          "dist/CapsWriter-Offline/config.py",
-          "dist/CapsWriter-Offline/util/client_tray.py"
-        )
-        foreach ($File in $RequiredFiles) {
-          if (-not (Test-Path $File)) {
-            throw "Missing packaged file: $File"
+      - name: Build unified application
+        run: pyinstaller build.spec
+
+      - name: Verify packaged layout
+        shell: pwsh
+        run: |
+          $RequiredFiles = @(
+            "dist/CapsWriter-Offline/CapsWriter.exe",
+            "dist/CapsWriter-Offline/config_client.py",
+            "dist/CapsWriter-Offline/config_server.py",
+            "dist/CapsWriter-Offline/core/app_runtime.py",
+            "dist/CapsWriter-Offline/core/client/app.py",
+            "dist/CapsWriter-Offline/core/server/app.py",
+            "dist/CapsWriter-Offline/models/请将模型文件放在此目录.txt",
+            "dist/CapsWriter-Offline/internal/_sounddevice_data/portaudio-binaries/libportaudio64bit.dll"
+          )
+          foreach ($File in $RequiredFiles) {
+            if (-not (Test-Path $File)) {
+              throw "Missing packaged file: $File"
+            }
           }
-        }
-        $PortAudio = "dist/CapsWriter-Offline/internal/_sounddevice_data/portaudio-binaries/libportaudio64bit.dll"
-        $ExpectedHash = "433b77811ed6a2509cd15d9af826335c458cd0ef5f424b02b97597c74e170462"
-        $ActualHash = (Get-FileHash -Algorithm SHA256 $PortAudio).Hash.ToLower()
-        if ($ActualHash -ne $ExpectedHash) {
-          throw "Unexpected Windows PortAudio binary: $ActualHash"
-        }
 
-    # ${{ github.ref_name }}
-    - name: Zip the Build
-      run: |
-        $VersionName = "${{ github.ref_name }}"
-        $ZipName = "CapsWriter-Offline-Windows-$VersionName.zip"
-        Compress-Archive -Path dist/CapsWriter-Offline/* -DestinationPath "dist/$ZipName"
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: CapsWriter-Offline-Windows-${{ github.ref_name }}
-        path: dist/*.zip
+      - name: Zip build
+        shell: pwsh
+        run: |
+          $VersionName = if ("${{ github.event_name }}" -eq "pull_request") {
+            "pr-${{ github.event.pull_request.number }}"
+          } else {
+            "${{ github.ref_name }}"
+          }
+          $ZipName = "CapsWriter-Offline-Windows-$VersionName.zip"
+          Compress-Archive `
+            -Path dist/CapsWriter-Offline/* `
+            -DestinationPath "dist/$ZipName"
 
-    # 【修改点 3】Release 上传 dist 下所有的 zip 文件
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: dist/*.zip
-        draft: false
-        prerelease: ${{ contains(github.ref_name, '-') }}
-        generate_release_notes: true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CapsWriter-Offline-Windows-${{ github.run_number }}
+          path: dist/*.zip
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: dist/*.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

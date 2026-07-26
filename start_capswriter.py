@@ -1,15 +1,9 @@
-"""Unified CapsWriter entry point.
-
-Double-clicking this entry starts the local recognition server, microphone
-client and system tray as one managed application.
-"""
+"""CapsWriter 单一桌面 App 入口。"""
 
 from __future__ import annotations
 
 
 def main() -> int:
-    # PyInstaller recommends calling this before imports that pull in heavy
-    # modules or create multiprocessing resources.
     from multiprocessing import freeze_support
 
     freeze_support()
@@ -25,13 +19,12 @@ def main() -> int:
         base_dir = Path(__file__).resolve().parent
     os.chdir(base_dir)
 
-    from util.app_runtime import run_server_self_test, show_already_running_message
-    from util.application import CapsWriterApplication
+    from core.app_runtime import (
+        UnifiedCapsWriterApplication,
+        show_already_running_message,
+    )
 
-    if sys.argv[1:] == ["--self-test-server"]:
-        return 0 if run_server_self_test(base_dir) else 1
-
-    application = CapsWriterApplication(base_dir)
+    application = UnifiedCapsWriterApplication(base_dir)
     if not application.acquire_instance():
         show_already_running_message()
         return 0
@@ -39,24 +32,26 @@ def main() -> int:
     try:
         application.run()
         return 0
-    except BaseException:
-        with (base_dir / "crash_log.txt").open("a", encoding="utf-8") as log:
-            traceback.print_exc(file=log)
-        try:
-            if os.name == "nt":
+    except BaseException as exc:
+        log_path = base_dir / "logs" / "crash_latest.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_file:
+            traceback.print_exc(file=log_file)
+        if os.name == "nt":
+            try:
                 import ctypes
 
                 ctypes.windll.user32.MessageBoxW(
                     0,
-                    "CapsWriter 启动失败，请查看 crash_log.txt。",
+                    f"CapsWriter 启动失败：{exc}\n请查看 logs 文件夹。",
                     "CapsWriter",
                     16,
                 )
-        except Exception:
-            pass
+            except Exception:
+                pass
         return 1
     finally:
-        application.shutdown()
+        application.stop()
 
 
 if __name__ == "__main__":

@@ -1,109 +1,96 @@
-import multiprocessing
-import os
-import sys
-import tempfile
-import threading
 import unittest
-import uuid
 from pathlib import Path
-from unittest.mock import patch
 
-from util.app_runtime import ServerSupervisor, SingleInstance, run_server_process
-
-
-def fake_server(stop_event, status_queue, _base_dir):
-    status_queue.put({"type": "loading", "message": "loading"})
-    status_queue.put({"type": "ready", "message": "ready"})
-    while not stop_event.wait(0.05):
-        pass
+from core.app_runtime import UnifiedCapsWriterApplication
+from core.app_status import AppState, app_status
 
 
-def failing_server(_stop_event, _status_queue, _base_dir):
-    raise SystemExit(7)
+class FakeContext:
+    pass
 
 
-class SingleInstanceTests(unittest.TestCase):
-    def test_only_one_instance_can_hold_lock(self):
-        name = f"CapsWriter-Test-{uuid.uuid4()}"
-        first = SingleInstance(name)
-        second = SingleInstance(name)
-        self.assertTrue(first.acquire())
-        self.assertFalse(second.acquire())
-        first.release()
-        self.assertTrue(second.acquire())
-        second.release()
+class FakeTray:
+    def __init__(self):
+        self.starts = 0
+        self.stops = 0
+
+    def start(self):
+        self.starts += 1
+
+    def stop(self):
+        self.stops += 1
 
 
-class ServerSupervisorTests(unittest.TestCase):
-    def test_server_process_restores_standard_streams_after_failure(self):
-        class Queue:
-            def __init__(self):
-                self.events = []
+class FakeClient:
+    def __init__(self):
+        self.tray = FakeTray()
+        self.starts = 0
+        self.stops = 0
 
-            def put(self, event):
-                self.events.append(event)
+    def start(self):
+        self.starts += 1
 
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        original_directory = Path.cwd()
-        queue = Queue()
-        try:
-            with tempfile.TemporaryDirectory() as directory:
-                with patch("core_server.init", side_effect=RuntimeError("boom")):
-                    with self.assertRaises(RuntimeError):
-                        run_server_process(None, queue, directory)
-        finally:
-            os.chdir(original_directory)
+    def stop(self):
+        self.stops += 1
 
-        self.assertIs(sys.stdout, original_stdout)
-        self.assertIs(sys.stderr, original_stderr)
-        self.assertTrue(queue.events)
 
-    def test_reports_status_and_stops_child(self):
-        ready = threading.Event()
-        events = []
+class FakeSupervisor:
+    def __init__(self, callback, event):
+        self.callback = callback
+        self.event = event
+        self.starts = 0
+        self.stops = 0
+        self.restarts = 0
 
-        def callback(event):
-            events.append(event)
-            if event["type"] == "ready":
-                ready.set()
+    def start(self):
+        self.starts += 1
+        self.callback(self.event)
 
-        with tempfile.TemporaryDirectory() as directory:
-            supervisor = ServerSupervisor(
-                multiprocessing.get_context("spawn"),
-                Path(directory),
-                callback,
-                process_target=fake_server,
-            )
-            supervisor.start()
-            self.assertTrue(ready.wait(5))
-            self.assertTrue(supervisor.is_alive)
-            supervisor.stop(timeout=2)
-            self.assertFalse(supervisor.is_alive)
+    def stop(self):
+        self.stops += 1
 
-        self.assertEqual([event["type"] for event in events], ["loading", "ready"])
+    def restart(self):
+        self.restarts += 1
 
-    def test_reports_unexpected_process_exit(self):
-        failed = threading.Event()
-        events = []
 
-        def callback(event):
-            events.append(event)
-            if event["type"] == "error":
-                failed.set()
+class UnifiedApplicationTests(unittest.TestCase):
+    def make_application(self, event):
+        client = FakeClient()
+        application = UnifiedCapsWriterApplication(
+            Path.cwd(),
+            context=FakeContext(),
+            client_factory=lambda: client,
+        )
+        supervisor = FakeSupervisor(application._server_event, event)
+        application._supervisor = supervisor
+        return application, client, supervisor
 
-        with tempfile.TemporaryDirectory() as directory:
-            supervisor = ServerSupervisor(
-                multiprocessing.get_context("spawn"),
-                Path(directory),
-                callback,
-                process_target=failing_server,
-            )
-            supervisor.start()
-            self.assertTrue(failed.wait(5))
-            supervisor.stop(timeout=1)
+    def test_starts_tray_before_client_and_stops_both_sides(self):
+        application, client, supervisor = self.make_application(
+            {"type": "ready", "message": "ready"}
+        )
 
-        self.assertIn("意外退出", events[-1]["message"])
+        application.run()
+        application.stop()
+
+        self.assertEqual(client.tray.starts, 1)
+        self.assertEqual(client.starts, 1)
+        self.assertEqual(client.stops, 1)
+        self.assertEqual(supervisor.starts, 1)
+        self.assertEqual(supervisor.stops, 1)
+        self.assertEqual(app_status.current.state, AppState.STOPPING)
+
+    def test_server_error_does_not_start_microphone_client(self):
+        application, client, _supervisor = self.make_application(
+            {"type": "error", "message": "missing model"}
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing model"):
+            application.run()
+        application.stop()
+
+        self.assertEqual(client.starts, 0)
+        self.assertEqual(client.tray.stops, 1)
 
 
 if __name__ == "__main__":
