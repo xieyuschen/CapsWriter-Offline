@@ -5,36 +5,32 @@ from config import ClientConfig as Config
 import numpy as np
 import base64
 import json
-import websockets
+from websockets.exceptions import ConnectionClosed
 from util.client_create_file import create_file
 from util.client_write_file import write_file
 from util.client_finish_file import finish_file
+from util.app_status import AppState, app_status
+from util.client_cosmic import websocket_is_open
 import uuid
 
-def is_ws_alive(ws):
-    if ws is None:
-        return False
-    try:
-        # 尝试调用新的属性，如果报错就试旧的，再报错就默认为 False
-        return getattr(ws, 'open', not getattr(ws, 'closed', False))
-    except:
-        return False
 
 async def send_message(message):
     # 发送数据
-    if not is_ws_alive(Cosmic.websocket):
+    if not websocket_is_open():
         if message['is_final']:
-            Cosmic.audio_files.pop(message['task_id'])
+            Cosmic.audio_files.pop(message['task_id'], None)
             console.print('    服务端未连接，无法发送\n')
+            app_status.set(AppState.DISCONNECTED)
     else:
         try:
             await Cosmic.websocket.send(json.dumps(message))
-        except websockets.ConnectionClosedError as e:
+        except ConnectionClosed:
             if message['is_final']:
-                console.print(f'[red]连接中断了')
-        except Exception as e:
-            print('出错了')
-            print(e)
+                console.print('[red]连接中断了')
+                app_status.set(AppState.DISCONNECTED)
+        except Exception as exc:
+            print(f'发送音频出错了：{exc}')
+            app_status.set(AppState.ERROR, f"发送音频失败：{exc}")
 
 
 async def send_audio():

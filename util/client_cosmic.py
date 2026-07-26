@@ -1,10 +1,7 @@
-from asyncio import Queue, AbstractEventLoop
-import websockets
+from asyncio import AbstractEventLoop, Queue
 import sounddevice as sd
-import sys
-from pathlib import Path
-from typing import List, Union
 from io import StringIO
+from typing import Any, List, Union
 
 from rich.console import Console 
 from rich.theme import Theme
@@ -22,7 +19,17 @@ class Cosmic:
     queue_in: Queue
     queue_out: Queue
     loop: Union[None, AbstractEventLoop] = None
-    websocket: websockets.WebSocketClientProtocol = None
+    websocket: Any = None
     audio_files = {}
     stream: Union[None, sd.InputStream] = None
     kwd_list: List[str] = []
+    stopping = False
+
+
+def websocket_is_open(websocket=None) -> bool:
+    websocket = Cosmic.websocket if websocket is None else websocket
+    if websocket is None:
+        return False
+    # The project deliberately uses websockets' legacy asyncio API because it
+    # supports the Python versions used by the existing Windows builds.
+    return not bool(getattr(websocket, "closed", True))

@@ -1,4 +1,8 @@
 models/
 build/
 dist
-util/__pycache__/
+__pycache__/
+.venv/
+client_log.txt
+server_log.txt
+crash_log.txt

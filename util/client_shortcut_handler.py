@@ -1,5 +1,5 @@
 import keyboard
-from util.client_cosmic import Cosmic, console
+from util.client_cosmic import Cosmic, websocket_is_open
 from config import ClientConfig as Config
 
 import time
@@ -8,50 +8,29 @@ from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from util.client_send_audio import send_audio
 from util.my_status import Status
+from util.app_status import AppState, app_status
 
-# === 新增导入 ===
-import sys
-import os
-from PIL import Image, ImageDraw
-import pystray
-
-task = asyncio.Future()
+task = None
 status = Status('开始录音', spinner='point')
 pool = ThreadPoolExecutor()
 pressed = False
 released = True
 event = Event()
 
-# === 托盘图标相关逻辑 ===
 
-def create_image(width, height, color_bg, color_fg):
-    image = Image.new('RGB', (width, height), color_bg)
-    dc = ImageDraw.Draw(image)
-    # 画一个圆点
-    dc.ellipse((width // 4, height // 4, 3 * width // 4, 3 * height // 4), fill=color_fg)
-    return image
+def shortcut_instruction() -> str:
+    shortcut = Config.shortcut.title()
+    if Config.hold_mode:
+        return f"按住 {shortcut} 开始说话，松开后识别。"
+    return f"按一下 {shortcut} 开始说话，再按一下结束。"
 
-# 预先生成两种图标状态
-icon_default = create_image(64, 64, 'black', 'white') # 待机：白点
-icon_recording = create_image(64, 64, 'black', 'red') # 录音：红点
 
-# 全局托盘变量
-tray_icon = None
+def recording_instruction() -> str:
+    shortcut = Config.shortcut.title()
+    if Config.hold_mode:
+        return f"正在录音，松开 {shortcut} 后开始识别。"
+    return f"正在录音，再按一下 {shortcut} 后开始识别。"
 
-def on_exit(icon, item):
-    """点击托盘退出菜单时的回调"""
-    icon.stop()
-    # 强制退出整个进程，因为还有一个子线程在跑
-    os._exit(0)
-
-def start_tray():
-    """供主程序调用的启动函数"""
-    global tray_icon
-    menu = (pystray.MenuItem('退出', on_exit),)
-    tray_icon = pystray.Icon("CapsWriter", icon_default, "CapsWriter Client", menu)
-    tray_icon.run()
-
-# =======================
 
 def shortcut_correct(e: keyboard.KeyboardEvent):
     key_expect = keyboard.normalize_name(Config.shortcut).replace('left ', '')
@@ -62,6 +41,10 @@ def shortcut_correct(e: keyboard.KeyboardEvent):
 
 def launch_task():
     global task
+
+    if not Cosmic.loop or not websocket_is_open():
+        app_status.set(AppState.DISCONNECTED)
+        return False
 
     # 记录开始时间
     t1 = time.time()
@@ -75,52 +58,36 @@ def launch_task():
     # 通知录音线程可以向队列放数据了
     Cosmic.on = t1
 
-    # 打印动画：正在录音
-    # status.start()
-    
-    # === 图标变红 ===
-    if tray_icon: 
-        tray_icon.icon = icon_recording
-        time.sleep(0.1)
-
+    status.start()
+    app_status.set(AppState.RECORDING, recording_instruction())
 
     # 启动识别任务
     task = asyncio.run_coroutine_threadsafe(
         send_audio(),
         Cosmic.loop,
     )
+    return True
 
 
 def cancel_task():
-    if Cosmic.on and (time.time() - Cosmic.on < 0.3):
-        return
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    # status.stop()
-    
-    # === 图标变白 ===
-    if tray_icon:
-        tray_icon.icon = icon_default
-        time.sleep(0.1)
+    status.stop()
+    app_status.set(AppState.READY, "录音时间太短，已取消。")
 
     # 取消协程任务
-    task.cancel()
+    if task is not None:
+        task.cancel()
 
 
 def finish_task():
     global task
-# === 核心保护逻辑：如果录音开启到现在还不满 1 秒，拒绝关闭 ===
-    # 这能防止第一次点击的“松开”动作瞬间把刚开启的录音给关了
-    if Cosmic.on and (time.time() - Cosmic.on < 1):
+    if not Cosmic.on:
         return
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    # status.stop()
-
-    # === 图标变白 ===
-    if tray_icon:
-        tray_icon.icon = icon_default
-        time.sleep(0.1)
+    status.stop()
+    app_status.set(AppState.PROCESSING)
 
     # 通知结束任务
     asyncio.run_coroutine_threadsafe(
@@ -145,20 +112,20 @@ def count_down(e: Event):
 
 def manage_task(e: Event):
     """
-    极简逻辑：只负责开关切换
+    通过按键持续时间区分单击切换和原始按键功能。
     """
-    # 1. 记录按下时的状态快照
-    was_running = Cosmic.on
+    on = Cosmic.on
 
-    if not was_running:
-        # 如果没在录音，启动它
+    if not on:
         launch_task()
-    else:
-        # 如果正在录音，停止它
-        finish_task()
 
-    # 2. 直接等待松开，不做任何超时判断，也不发送模拟按键
-    e.wait()
+    if e.wait(timeout=Config.threshold * 0.8):
+        if Cosmic.on and on:
+            finish_task()
+    else:
+        if not on and Cosmic.on:
+            cancel_task()
+        keyboard.send(Config.shortcut)
 
 
 def click_mode(e: keyboard.KeyboardEvent):
@@ -186,7 +153,7 @@ def hold_mode(e: keyboard.KeyboardEvent):
     if e.event_type == 'down' and not Cosmic.on:
         # 记录开始时间
         launch_task()
-    elif e.event_type == 'up':
+    elif e.event_type == 'up' and Cosmic.on:
         # 记录持续时间，并标识录音线程停止向队列放数据
         duration = time.time() - Cosmic.on
 
@@ -230,8 +197,21 @@ def click_handler(e: keyboard.KeyboardEvent) -> None:
 
 def bond_shortcut():
     if Config.hold_mode:
-        keyboard.hook_key(Config.shortcut, hold_handler, suppress=Config.suppress)
+        return keyboard.hook_key(
+            Config.shortcut, hold_handler, suppress=Config.suppress
+        )
     else:
         # 单击模式，必须得阻塞快捷键
         # 收到长按时，再模拟发送按键
-        keyboard.hook_key(Config.shortcut, click_handler, suppress=True)
+        return keyboard.hook_key(Config.shortcut, click_handler, suppress=True)
+
+
+def unbond_shortcut(handler) -> None:
+    global task
+    Cosmic.on = False
+    status.stop()
+    if task is not None and not task.done():
+        task.cancel()
+    task = None
+    if handler is not None:
+        keyboard.unhook(handler)

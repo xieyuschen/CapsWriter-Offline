@@ -22,26 +22,44 @@ jobs:
         python-version: '3.10' 
         architecture: 'x64'
 
-    - name: Install dependencies
+    - name: Install client and server dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-client.txt
+        pip install -r requirements.txt
 
-    - name: Build with PyInstaller
+    - name: Build unified application with PyInstaller
       run: |
-        pyinstaller ./build-client.spec
+        pyinstaller ./build.spec
 
+    - name: Verify packaged application layout
+      run: |
+        $RequiredFiles = @(
+          "dist/CapsWriter-Offline/CapsWriter.exe",
+          "dist/CapsWriter-Offline/config.py",
+          "dist/CapsWriter-Offline/util/client_tray.py"
+        )
+        foreach ($File in $RequiredFiles) {
+          if (-not (Test-Path $File)) {
+            throw "Missing packaged file: $File"
+          }
+        }
+        $PortAudio = "dist/CapsWriter-Offline/internal/_sounddevice_data/portaudio-binaries/libportaudio64bit.dll"
+        $ExpectedHash = "433b77811ed6a2509cd15d9af826335c458cd0ef5f424b02b97597c74e170462"
+        $ActualHash = (Get-FileHash -Algorithm SHA256 $PortAudio).Hash.ToLower()
+        if ($ActualHash -ne $ExpectedHash) {
+          throw "Unexpected Windows PortAudio binary: $ActualHash"
+        }
 
     # ${{ github.ref_name }}
     - name: Zip the Build
       run: |
         $VersionName = "${{ github.ref_name }}"
-        $ZipName = "CapsWriter-Client-Windows-$VersionName.zip"
-        Compress-Archive -Path dist/CapsWriter-Offline-Client/* -DestinationPath "dist/$ZipName"
+        $ZipName = "CapsWriter-Offline-Windows-$VersionName.zip"
+        Compress-Archive -Path dist/CapsWriter-Offline/* -DestinationPath "dist/$ZipName"
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: CapsWriter-Client-Windows-${{ github.ref_name }}
+        name: CapsWriter-Offline-Windows-${{ github.ref_name }}
         path: dist/*.zip
 
     # 【修改点 3】Release 上传 dist 下所有的 zip 文件
@@ -51,5 +69,5 @@ jobs:
       with:
         files: dist/*.zip
         draft: false
-        prerelease: false
+        prerelease: ${{ contains(github.ref_name, '-') }}
         generate_release_notes: true
