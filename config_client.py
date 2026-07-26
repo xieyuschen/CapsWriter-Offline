@@ -20,7 +20,7 @@ class ClientConfig:
             'key': 'caps_lock',     # 监听大写锁定键
             'type': 'keyboard',     # 是键盘快捷键
             'suppress': True,      # 阻塞按键（短按会补发）
-            'hold_mode': True,      # 长按模式
+            'hold_mode': False,     # 单击开始，再次单击结束
             'enabled': True         # 启用此快捷键
         },
         {
@@ -130,4 +130,3 @@ r"""
   {'key': 'f12', 'type': 'keyboard', 'suppress': True, 'hold_mode': True, 'enabled': True}, 
   {'key': 'x2', 'type': 'mouse', 'suppress': True, 'hold_mode': True, 'enabled': True}, 
 """
-

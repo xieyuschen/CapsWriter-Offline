@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from config_client import ClientConfig as Config
+from core.app_status import AppState, app_status
 from core.client.state import console
 from core.protocol import RecognitionMessage
 
@@ -175,6 +176,7 @@ class ResultProcessor:
                     break
 
             console.print(f'[bold red]已断开服务端连接[/bold red]\n')
+            app_status.set(AppState.DISCONNECTED)
             self._cleanup()
             
 
@@ -308,6 +310,7 @@ class ResultProcessor:
         # 检测修饰键状态（调试用）
         self._log_modifier_key_state()
 
+        app_status.set(AppState.READY, "识别结果已输出，可以继续录音。")
         console.line()
     
     def _cleanup(self) -> None:

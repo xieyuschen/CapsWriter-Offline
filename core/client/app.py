@@ -122,7 +122,7 @@ class CapsWriterClient:
         """
 
         # 注册退出函数
-        register_signal(self.stop)
+        register_signal(getattr(self, "exit_callback", self.stop))
 
         files = [Path(f) for f in sys.argv[1:] if os.path.exists(f)]
 
@@ -137,5 +137,4 @@ class CapsWriterClient:
             self.loop.run_until_complete(runner.run())
         except RuntimeError:
             ...
-
 

@@ -22,6 +22,19 @@ import platform
 import subprocess
 from typing import Optional
 from . import logger, set_ui_logger
+from core.app_status import AppState, app_info
+
+
+STATE_COLORS = {
+    AppState.STARTING: "#F59E0B",
+    AppState.LOADING: "#F59E0B",
+    AppState.READY: "#22C55E",
+    AppState.RECORDING: "#EF4444",
+    AppState.PROCESSING: "#3B82F6",
+    AppState.DISCONNECTED: "#F97316",
+    AppState.ERROR: "#DC2626",
+    AppState.STOPPING: "#94A3B8",
+}
 
 # 退出回调函数（由主程序传入）
 _exit_callback = None
@@ -206,10 +219,45 @@ def _create_icon(icon_path: Optional[str] = None):
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def _create_status_icon(state: AppState, size: int = 64):
+    """生成在 Windows 小尺寸托盘中仍清晰可辨的状态图标。"""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    margin = max(3, size // 16)
+    draw.ellipse(
+        (margin, margin, size - margin, size - margin),
+        fill="#172033",
+        outline="#E2E8F0",
+        width=max(2, size // 16),
+    )
+    color = STATE_COLORS[state]
+    if state == AppState.ERROR:
+        width = max(4, size // 10)
+        pad = size // 3
+        draw.line((pad, pad, size - pad, size - pad), fill=color, width=width)
+        draw.line((size - pad, pad, pad, size - pad), fill=color, width=width)
+    elif state == AppState.PROCESSING:
+        width = max(4, size // 12)
+        pad = size // 4
+        draw.arc((pad, pad, size - pad, size - pad), 25, 300, fill=color, width=width)
+    else:
+        pad = size // 3
+        draw.ellipse((pad, pad, size - pad, size - pad), fill=color)
+    return image
+
+
 class _TraySystem:
     """托盘系统内部类"""
     
-    def __init__(self, name: Optional[str] = None, icon_path: Optional[str] = None, more_options: list = None):
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        icon_path: Optional[str] = None,
+        more_options: list = None,
+        status_bus=None,
+    ):
         # 延迟导入 pystray
         import pystray
         from pystray import MenuItem as item
@@ -217,6 +265,14 @@ class _TraySystem:
         self.hwnd = _get_console_hwnd()
         self.should_exit = False
         self.title = name if name else (os.path.basename(sys.argv[0]) or "Console App")
+        self.status_bus = status_bus
+        self._status_listener_id = None
+        self._info_listener_id = None
+        self._status_icons = (
+            {state: _create_status_icon(state) for state in AppState}
+            if status_bus is not None
+            else None
+        )
 
         # 禁用关闭按钮
         if self.hwnd:
@@ -225,23 +281,57 @@ class _TraySystem:
         # 定义菜单
         menu_items = [
             item(f"{self.title}", lambda: None, enabled=False),
-            item('👁️ 显示/隐藏', self.toggle_window, default=True),
         ]
+        if self.hwnd:
+            menu_items.append(item('👁️ 显示/隐藏', self.toggle_window, default=True))
 
         # 添加额外选项
         if more_options:
-            for opt_name, opt_func in more_options:
-                menu_items.append(item(opt_name, opt_func))
+            for option in more_options:
+                if len(option) == 3:
+                    opt_name, opt_func, enabled = option
+                    menu_items.append(item(opt_name, opt_func, enabled=enabled))
+                else:
+                    opt_name, opt_func = option
+                    menu_items.append(item(opt_name, opt_func))
 
         menu_items.append(item('🔄 重启', self.on_restart))
         menu_items.append(item('❌ 退出', self.on_exit))
 
         self.icon = pystray.Icon(
             "console_tray",
-            _create_icon(icon_path),
+            (
+                self._status_icons[status_bus.current.state]
+                if status_bus is not None
+                else _create_icon(icon_path)
+            ),
             title=f"{self.title}",
             menu=tuple(menu_items)
         )
+        if status_bus is not None:
+            self._status_listener_id = status_bus.subscribe(self._on_status)
+            self._info_listener_id = app_info.subscribe(self._on_info)
+
+    def _on_status(self, snapshot) -> None:
+        """刷新托盘图标、标题、菜单和 Windows 通知。"""
+        try:
+            self.icon.icon = self._status_icons[snapshot.state]
+            self.icon.title = f"CapsWriter · {snapshot.title}"
+            self.icon.update_menu()
+            if snapshot.notify:
+                try:
+                    self.icon.remove_notification()
+                except (AttributeError, NotImplementedError):
+                    pass
+                self.icon.notify(snapshot.message, snapshot.title)
+        except (AttributeError, NotImplementedError, RuntimeError):
+            pass
+
+    def _on_info(self, _microphone: str) -> None:
+        try:
+            self.icon.update_menu()
+        except (AttributeError, NotImplementedError, RuntimeError):
+            pass
 
     def toggle_window(self) -> None:
         """切换窗口显示状态"""
@@ -264,8 +354,16 @@ class _TraySystem:
             time.sleep(0.2)
 
     def on_restart(self, icon, item) -> None:
-        """托盘重启处理：启动新进程后退出当前进程"""
+        """托盘重启处理：先释放单实例锁和子进程，再启动新进程。"""
         logger.info("托盘重启: 用户点击重启菜单，准备重启程序")
+        exit_callback = _get_exit_callback()
+        if exit_callback:
+            try:
+                exit_callback()
+            except Exception as e:
+                logger.error(f"重启时调用退出回调发生错误: {e}")
+                return
+
         try:
             if getattr(sys, 'frozen', False):
                 cmd = sys.argv
@@ -275,14 +373,6 @@ class _TraySystem:
         except Exception as e:
             logger.error(f"重启失败: {e}")
             return
-
-        # 启动新进程成功后，调用退出回调退出当前进程
-        exit_callback = _get_exit_callback()
-        if exit_callback:
-            try:
-                exit_callback()
-            except Exception as e:
-                logger.error(f"重启时调用退出回调发生错误: {e}")
 
     def on_exit(self, icon, item) -> None:
         """托盘退出处理"""
@@ -314,6 +404,12 @@ class _TraySystem:
         # 5. 停止托盘图标
         try:
             logger.debug("正在停止托盘图标线程...")
+            if self.status_bus is not None and self._status_listener_id is not None:
+                self.status_bus.unsubscribe(self._status_listener_id)
+                self._status_listener_id = None
+            if self._info_listener_id is not None:
+                app_info.unsubscribe(self._info_listener_id)
+                self._info_listener_id = None
             self.icon.stop()
             logger.debug("托盘图标线程已停止")
         except Exception as e:
@@ -333,7 +429,13 @@ class _TraySystem:
         self.toggle_window()
 
 
-def enable_min_to_tray(name: Optional[str] = None, icon_path: Optional[str] = None, exit_callback=None, more_options: list = None) -> None:
+def enable_min_to_tray(
+    name: Optional[str] = None,
+    icon_path: Optional[str] = None,
+    exit_callback=None,
+    more_options: list = None,
+    status_bus=None,
+) -> None:
     """
     启用最小化到托盘功能
 
@@ -370,10 +472,8 @@ def enable_min_to_tray(name: Optional[str] = None, icon_path: Optional[str] = No
         if _tray_instance is not None:
             return  # 已启动
 
-        if not _get_console_hwnd():
-            return  # 没有控制台窗口
-
-        _tray_instance = _TraySystem(name, icon_path, more_options)
+        # Windowed PyInstaller 应用没有控制台句柄，但仍然需要托盘。
+        _tray_instance = _TraySystem(name, icon_path, more_options, status_bus)
         _tray_instance.start()
 
 
@@ -383,6 +483,17 @@ def stop_tray() -> None:
     global _tray_instance
     if _tray_instance and _tray_instance.icon:
         try:
+            if (
+                _tray_instance.status_bus is not None
+                and _tray_instance._status_listener_id is not None
+            ):
+                _tray_instance.status_bus.unsubscribe(
+                    _tray_instance._status_listener_id
+                )
+                _tray_instance._status_listener_id = None
+            if _tray_instance._info_listener_id is not None:
+                app_info.unsubscribe(_tray_instance._info_listener_id)
+                _tray_instance._info_listener_id = None
             _tray_instance.icon.stop()
         except Exception:
             pass

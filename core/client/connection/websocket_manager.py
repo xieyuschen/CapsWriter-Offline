@@ -15,6 +15,7 @@ import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from config_client import ClientConfig as Config
+from core.app_status import AppState, app_status
 from core.protocol import AudioMessage, RecognitionMessage
 from ..state import console
 from .. import logger
@@ -102,16 +103,23 @@ class WebSocketManager:
             console.print(f'[bold green]已连接服务端: {url}[/bold green]\n')
             logger.info(f"WebSocket 建立成功: {url}")
             self._connect_fail_logged = False
+            if self.state.stream is not None:
+                app_status.set(
+                    AppState.READY,
+                    "麦克风和本地语音服务均已就绪。",
+                )
             return True
 
         except (ConnectionRefusedError, TimeoutError):
             if not self._connect_fail_logged:
                 logger.debug(f"连接服务端 {url} 被拒绝或超时")
                 self._connect_fail_logged = True
+                app_status.set(AppState.DISCONNECTED)
         except Exception as e:
             if not self._connect_fail_logged:
                 logger.debug(f"连接服务端 {url} 失败: {e}")
                 self._connect_fail_logged = True
+                app_status.set(AppState.DISCONNECTED, f"本地语音服务连接失败：{e}")
         
         return False
     

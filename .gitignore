@@ -148,6 +148,9 @@ cython_debug/
 # 模型文件（体积巨大，只保留下载链接）
 models/*/*/
 models/*.py
+# v1.x 的旧模型目录仍可能留在工作区，迁移时不要误提交。
+models/paraformer-offline-zh/
+models/punc_ct-transformer_cn-en/
 
 # 日志与按年归档的文件夹（如 2026/01/...）
 20*/
@@ -163,6 +166,7 @@ logs/
 # 运行生成的临时文件 / 二进制
 *.exe
 *.log
+*_log.txt
 
 
 

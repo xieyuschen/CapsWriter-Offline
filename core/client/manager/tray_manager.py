@@ -1,8 +1,13 @@
 # coding: utf-8
 import os
+import sys
+import subprocess
+import time
+from pathlib import Path
+
 from . import logger
-import os, sys, subprocess
 from config_client import ClientConfig as Config
+from core.app_status import app_info, app_status
 
 
 class TrayManager:
@@ -32,16 +37,24 @@ class TrayManager:
         
         # 启用托盘
         enable_min_to_tray(
-            'CapsWriter Client',
+            'CapsWriter',
             icon_path,
-            exit_callback=self.app.stop,
+            exit_callback=getattr(self.app, "exit_callback", self.app.stop),
             more_options=[
+                (self._status_text, self._noop, False),
+                (self._microphone_text, self._noop, False),
+                (self._client_config_text, self._open_client_config),
+                (self._server_config_text, self._open_server_config),
+                (self._save_directory_text, self._open_save_directory),
+                ('📂 日志目录', self._open_logs),
                 ('📋 复制结果', self._copy_last_result),
                 ('📝 上下文', self._add_context),
                 ('✨ 热词', self._add_hotword),
                 ('🧹 清除记忆', self._clear_memory),
                 ('♻️ 重开音频', self._restart_audio),
-            ]
+                ('♻️ 重启本地服务', self._restart_server),
+            ],
+            status_bus=app_status,
         )
         logger.info("托盘图标已启用")
 
@@ -62,6 +75,65 @@ class TrayManager:
         if hasattr(self.app, 'stream') and self.app.stream:
             self.app.stream.reopen()
             logger.info("用户请求重启音频")
+
+    def _restart_server(self):
+        callback = getattr(self.app, "restart_server_callback", None)
+        if callback is not None:
+            callback()
+
+    @staticmethod
+    def _noop(*_args):
+        return None
+
+    @staticmethod
+    def _status_text(_item) -> str:
+        return f"状态：{app_status.current.title}"
+
+    @staticmethod
+    def _microphone_text(_item) -> str:
+        return f"当前麦克风：{app_info.microphone}"
+
+    @property
+    def _base_dir(self) -> Path:
+        return Path(self.app.base_dir).resolve()
+
+    def _client_config_text(self, _item) -> str:
+        return f"客户端配置：{self._base_dir / 'config_client.py'}"
+
+    def _server_config_text(self, _item) -> str:
+        return f"服务端配置：{self._base_dir / 'config_server.py'}"
+
+    def _save_directory(self) -> Path:
+        now = time.localtime()
+        return self._base_dir / time.strftime("%Y", now) / time.strftime("%m", now)
+
+    def _save_directory_text(self, _item) -> str:
+        return f"保存目录：{self._save_directory()}"
+
+    @staticmethod
+    def _open_path(path: Path) -> None:
+        if os.name == "nt":
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+
+    def _open_client_config(self):
+        self._open_path(self._base_dir / "config_client.py")
+
+    def _open_server_config(self):
+        self._open_path(self._base_dir / "config_server.py")
+
+    def _open_save_directory(self):
+        path = self._save_directory()
+        path.mkdir(parents=True, exist_ok=True)
+        self._open_path(path)
+
+    def _open_logs(self):
+        path = self._base_dir / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        self._open_path(path)
 
     def _clear_memory(self):
         """清除 LLM 对话历史回调"""

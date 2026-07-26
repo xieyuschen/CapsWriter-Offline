@@ -2,20 +2,22 @@
 
 ![demo](assets/demo.png)
 
-> **按住 CapsLock 说话，松开就上屏。就这么简单。**
+> **双击一个 App，点按 CapsLock 说话，再点一下就上屏。**
 
 **CapsWriter-Offline** 是一个专为 Windows 打造的**完全离线**语音输入工具。
+本分支基于上游 v2.6，并将本地服务端、麦克风客户端和系统托盘整合为一个
+`CapsWriter.exe`。
 
 ## ✨ 核心特性
 
--   **语音输入**：按住 `CapsLock键` 或 `鼠标侧键X2` 说话，松开即输入，超低延迟，默认去除末尾逗句号。支持对讲机模式和单击录音模式。
+-   **语音输入**：默认点按 `CapsLock键` 开始、再次点按结束；也可按住 `鼠标侧键X2` 说话、松开结束。每个快捷键都能独立配置单击或按住模式。
 -   **文件转录**：音视频文件往客户端 exe 一丢，字幕 (`.srt`)、文本 (`.txt`)、时间戳 (`.json`) 统统都有。
 -   **数字 ITN**：自动将「十五六个」转为「15~16个」，支持各种复杂数字格式。
 -   **热词替换**：在 `hot.txt` 记下偏僻词，通过音素模糊匹配，相似度大于阈值则强制替换。
 -   **正则替换**：在 `hot-rule.txt` 用正则或简单等号规则，精准强制替换。
 -   **LLM 角色**：预置了润色、小助理等角色，当识别结果的开头匹配任一角色名字时，将交由该角色处理。
--   **托盘菜单**：右键托盘图标即可添加热词、复制结果、清除LLM记忆。
--   **C/S 架构**：服务端与客户端分离，虽然 Win7 老电脑跑不了服务端模型，但最少能用客户端输入。
+-   **托盘菜单**：右键托盘图标可查看运行状态、当前麦克风、配置文件和保存目录，也可添加热词、打开日志、重开音频或重启本地服务。
+-   **单一 App**：内部仍保留稳定的 C/S 隔离架构，对外只需启动和退出一个程序。
 -   **日记归档**：按日期保存你的每一句语音及其识别结果。
 -   **录音保存**：所有语音均保存为本地音频文件，隐私安全，永不丢失。
 
@@ -72,31 +74,60 @@ CapsWriter 的特别之处在于追求：
 ## 🎬 快速开始
 
 1.  **准备环境**：确保安装了 [VC++ 运行库](https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist)。若要使用文件转录功能，还需安装 [ffmpeg](https://ffmpeg.org/download.html) 并确保其在系统 PATH 中。
-2.  **下载解压**：下载 [Latest Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/latest) 里的软件本体，再到 [Models Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models) 下载模型压缩包，将模型解压，放入 `models` 文件夹中对应模型的文件夹里。
-3.  **启动服务**：双击 `start_server.exe`，**它会自动最小化到托盘菜单**。
-4.  **启动听写**：双击 `start_client.exe`，**它会自动最小化到托盘菜单**。
-5.  **开始录音**：按住 `CapsLock键` 或 `鼠标侧键X2` 就可以说话了！
+2.  **下载解压**：下载 [Latest Release](https://github.com/xieyuschen/CapsWriter-Offline/releases/latest) 里的软件本体，再到 [Models Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models) 下载模型压缩包，将模型解压，放入 `models` 文件夹中对应模型的文件夹里。
+3.  **启动 App**：双击 `CapsWriter.exe`，客户端、服务端和模型进程会统一启动，右下角托盘会自动显示加载状态。
+4.  **开始录音**：点按一次 `CapsLock键` 开始说话，再点一次结束；也可以按住 `鼠标侧键X2`，松开后识别。
+5.  **退出 App**：从托盘菜单选择退出，客户端、服务端和模型进程会一并关闭。
+
+从本分支 v1.1 升级时，请按 v2.6 的 Models Release 重新放置模型；旧版
+`paraformer-offline-zh` / `punc_ct-transformer_cn-en` 目录不是 v2.6 的目录结构。
+
+托盘图标会随状态变色：黄色表示启动/加载，绿色表示就绪，红色表示录音，
+蓝色表示识别，橙色表示断开，红叉表示异常。右键菜单会显示两个配置文件的
+完整路径、当前月份的保存目录、实际使用的麦克风和日志目录，路径项可直接打开。
 
 
 ## ⚙️ 个性化配置
 
 所有的设置都在根目录的 `config_server.py` 和 `config_client.py` 里，可直接编辑。
+`config_client.py` 的 `shortcuts` 支持同时配置键盘和鼠标快捷键，并分别设置
+`hold_mode`。默认 CapsLock 为单击切换，鼠标 X2 为按住说话。
 
 
 ## 🛠️ 常见问题
 
 
 **Q: 为什么按了没反应？**  
-A: 请确认 `start_client.exe` 的黑窗口还在运行。若想在管理员权限运行的程序中输入，也需以管理员权限运行客户端。
+A: 查看右下角托盘是否为绿色，并从托盘确认当前麦克风和日志。若想在管理员权限运行的程序中输入，也需以管理员权限运行 CapsWriter。
 
 **Q: 为什么识别结果没字？**  
 A: 到 `年/月/assets` 文件夹中检查录音文件，看是不是没有录到音；听听录音效果，是不是麦克风太差，建议使用桌面 USB 麦克风；检查麦克风权限。
 
-**Q: 想要隐藏黑窗口？**  
-A: 点击托盘菜单即可隐藏黑窗口。
+**Q: 日志在哪里？**
+
+A: 在托盘菜单点击“日志目录”，客户端和服务端日志都在 `logs` 文件夹。
 
 **Q: 如何开机启动？**  
-A: `Win+R` 输入 `shell:startup` 打开启动文件夹，将服务端、客户端的快捷方式放进去即可。
+A: `Win+R` 输入 `shell:startup` 打开启动文件夹，将 `CapsWriter.exe` 的快捷方式放进去即可。
+
+## 从源码运行与打包
+
+推荐 Python 3.10：
+
+```shell
+pip install -r requirements.txt
+python start_capswriter.py
+```
+
+Windows 打包：
+
+```shell
+pyinstaller build.spec
+```
+
+输出位于 `dist/CapsWriter-Offline`。模型不会复制进发行包，需要按上面的模型说明
+单独放入 `models`。调试远程客户端或服务端时，仍可分别运行 `start_client.py`
+和 `start_server.py`。
 
 更多问题请参阅 [docs/常见问题.md](docs/常见问题.md)。
 

@@ -5,6 +5,7 @@
 检查配置的语音模型文件是否存在，如果不存在则提供下载链接。
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -69,6 +70,8 @@ def check_model() -> None:
     - 'qwen_asr'
 
         ''', style='bright_red')
+        if os.environ.get("CAPSWRITER_UNIFIED_SERVER") == "1":
+            raise ValueError(error_msg)
         input('按回车退出')
         sys.exit(1)
 
@@ -101,6 +104,9 @@ def check_model() -> None:
         error_msg += '\n'
         
         logger.error(error_msg)
+        if os.environ.get("CAPSWRITER_UNIFIED_SERVER") == "1":
+            missing = "、".join(str(path) for path in missing_files)
+            raise FileNotFoundError(f"未找到模型文件：{missing}")
         input('按回车退出')
         sys.exit(1)
 

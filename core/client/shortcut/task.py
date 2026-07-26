@@ -12,6 +12,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Optional
 
 from . import logger
+from core.app_status import AppState, app_status
 from core.tools.my_status import Status
  
 if TYPE_CHECKING:
@@ -72,6 +73,14 @@ class ShortcutTask:
 
     def launch(self) -> None:
         """启动录音任务"""
+        if self.state.stream is None:
+            logger.warning(f"[{self.shortcut.key}] 麦克风未就绪，忽略录音请求")
+            app_status.set(
+                AppState.ERROR,
+                "麦克风未就绪；请连接设备后从托盘选择“重开音频”。",
+            )
+            return
+
         logger.info(f"[{self.shortcut.key}] 触发：开始录音")
 
         # 记录开始时间
@@ -86,6 +95,11 @@ class ShortcutTask:
 
         # 更新录音状态
         self.state.start_recording(self.recording_start_time)
+        app_status.set(
+            AppState.RECORDING,
+            f"正在通过 {self.shortcut.key} 录音。",
+            notify=False,
+        )
 
         # 打印动画：正在录音
         self._status.start()
@@ -107,6 +121,8 @@ class ShortcutTask:
 
         self.task.cancel()
         self.task = None
+        if self.state.is_connected:
+            app_status.set(AppState.READY, "录音时间过短，已取消。", notify=False)
 
     def finish(self) -> None:
         """完成录音任务"""
@@ -115,6 +131,7 @@ class ShortcutTask:
         self.is_recording = False
         self.state.stop_recording()
         self._status.stop()
+        app_status.set(AppState.PROCESSING, notify=False)
 
         asyncio.run_coroutine_threadsafe(
             self.state.queue_in.put({

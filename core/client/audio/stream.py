@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 import threading
 from typing import TYPE_CHECKING, Optional
@@ -17,6 +16,7 @@ import numpy as np
 import sounddevice as sd
 
 from core.client.state import console
+from core.app_status import AppState, app_info, app_status
 from . import logger
 
 if TYPE_CHECKING:
@@ -120,12 +120,18 @@ class AudioStreamManager:
                 end='\n\n'
             )
             logger.info(f"找到音频设备: {device_name}, 声道数: {self._channels}")
+            app_info.set_microphone(str(device_name))
         except UnicodeDecodeError:
             logger.warning("无法获取音频设备名称（编码问题）")
-        except sd.PortAudioError:
-            logger.error("未找到麦克风设备")
-            input('按回车键退出')
-            sys.exit(1)
+            app_info.set_microphone("默认输入设备（名称无法读取）")
+        except sd.PortAudioError as exc:
+            logger.error("未找到麦克风设备: %s", exc)
+            app_info.set_microphone("未找到可用麦克风")
+            app_status.set(
+                AppState.ERROR,
+                "未找到可用麦克风；连接设备后可从托盘选择“重开音频”。",
+            )
+            return None
 
         # 创建音频流
         try:
@@ -142,6 +148,8 @@ class AudioStreamManager:
 
             self.state.stream = stream
             self._running = True
+            if self.state.is_connected:
+                app_status.set(AppState.READY, "麦克风和本地语音服务均已就绪。")
             logger.debug(
                 f"音频流已启动: 采样率={self.SAMPLE_RATE}, "
                 f"块大小={int(self.BLOCK_DURATION * self.SAMPLE_RATE)}"
@@ -150,6 +158,8 @@ class AudioStreamManager:
 
         except sd.PortAudioError as e:
             logger.error(f"创建音频流失败: {e}", exc_info=True)
+            app_info.set_microphone(f"无法打开：{app_info.microphone}")
+            app_status.set(AppState.ERROR, f"无法打开麦克风：{e}")
             if '-9999' in str(e):
                 console.print("""
 [bold red]检测到麦克风被占用或权限异常（错误码 -9999）[/bold red]
@@ -162,6 +172,7 @@ class AudioStreamManager:
             return None
         except Exception as e:
             logger.error(f"创建音频流失败: {e}", exc_info=True)
+            app_status.set(AppState.ERROR, f"无法打开麦克风：{e}")
             return None
 
     def stop(self) -> None:
@@ -187,6 +198,7 @@ class AudioStreamManager:
             新创建的音频输入流
         """
         logger.info("正在重启音频流...")
+        app_info.set_microphone("正在重新检测…")
 
         # 停止旧流
         self.stop()

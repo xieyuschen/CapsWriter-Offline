@@ -24,7 +24,7 @@ class CapsWriterServer:
     
     管理的外部接口极其简洁：start()。
     """
-    def __init__(self):
+    def __init__(self, status_callback=None):
         # 确保正确的工作目录
         self.base_dir = Path(__file__).parents[2]
         os.chdir(self.base_dir)
@@ -43,6 +43,15 @@ class CapsWriterServer:
 
         self.version = __version__
         self.is_alive = False
+        self._status_callback = status_callback
+
+    def _publish_status(self, event_type: str, message: str) -> None:
+        if self._status_callback is None:
+            return
+        try:
+            self._status_callback({"type": event_type, "message": message})
+        except Exception:
+            logger.debug("无法向统一 App 回传服务端状态", exc_info=True)
 
 
     def _print_banner(self):
@@ -101,7 +110,16 @@ class CapsWriterServer:
         self._print_banner()
 
         # 拉起识别子进程
-        self.process_manager.start()
+        self._publish_status("loading", "正在检查并加载离线语音模型。")
+        try:
+            self.process_manager.start()
+        except BaseException as exc:
+            detail = str(exc) or type(exc).__name__
+            self._publish_status("error", f"模型加载失败：{detail}")
+            raise
+        if not self.is_alive:
+            return
+        self._publish_status("ready", "本地语音服务已就绪。")
         
         # 开启网络服务监听 (接管当前线程直至退出)
         try:

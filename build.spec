@@ -1,299 +1,175 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-现代化 PyInstaller 打包配置
-适配 PyInstaller 6.0+ 版本
-"""
+"""PyInstaller：将 Client、Server 与托盘打包为一个 CapsWriter.exe。"""
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
-# from PyInstaller.building.build_main import Analysis, COLLECT
-from os.path import join, basename, dirname, exists
-from os import walk, makedirs
-from shutil import copyfile, rmtree
+from os import makedirs, walk
+from os.path import basename, dirname, exists, join
+from shutil import copyfile
 
-# ==================== 打包配置选项 ====================
-
-# 是否收集 CUDA provider
-# - True: 包含 onnxruntime_providers_cuda.dll，支持 GPU 加速（需要在用户机器安装 CUDA 和 CUDNN）
-# - False: 不包含 CUDA provider，只使用 CPU 模式（打包体积更小，兼容性更好）
-INCLUDE_CUDA_PROVIDER = False
-
-# ====================================================
+from PyInstaller.utils.hooks import collect_all
 
 
-# 初始化空列表
 binaries = []
-hiddenimports = []
 datas = []
-
-# 收集 sherpa_onnx 相关文件
-try:
-    sherpa_datas = collect_data_files('sherpa_onnx', include_py_files=False)
-
-    # 根据 INCLUDE_CUDA_PROVIDER 决定是否收集 CUDA provider
-    if not INCLUDE_CUDA_PROVIDER:
-        # 过滤掉 CUDA provider 文件
-        filtered_datas = []
-        for src, dest in sherpa_datas:
-            # 检查是否是 CUDA provider 相关文件
-            if 'providers_cuda' not in basename(src).lower():
-                filtered_datas.append((src, dest))
-            else:
-                print(f"[INFO] 排除 CUDA provider: {basename(src)}")
-        sherpa_datas = filtered_datas
-
-    datas += sherpa_datas
-except:
-    pass
-
-# 收集 Pillow 相关文件（用于托盘图标）
-try:
-    pillow_datas = collect_data_files('PIL', include_py_files=False)
-    datas += pillow_datas
-    pillow_binaries = collect_all('PIL')
-    binaries += pillow_binaries[1]
-except:
-    pass
-
-# 隐藏导入 - 确保所有需要的模块都被包含
-hiddenimports += [
-    'websockets',
-    'websockets.client',
-    'websockets.server',
-    'rich',
-    'rich.console',
-    'rich.markdown',
-    'rich._unicode_data.unicode17-0-0',
-    'keyboard',
-    'pyclip', 
-    'numpy',
-    'sounddevice',
-    'pypinyin',
-    'watchdog',
-    'typer',
-    'srt',
-    'sherpa_onnx',
-    'PIL',           # Pillow 用于托盘图标
-    'PIL.Image',
-    'pystray',       # 托盘图标库
+hiddenimports = [
+    "websockets",
+    "websockets.client",
+    "websockets.server",
+    "rich",
+    "rich.console",
+    "rich.markdown",
+    "rich._unicode_data.unicode17-0-0",
+    "keyboard",
+    "pynput",
+    "pyclip",
+    "numpy",
+    "numba",
+    "sounddevice",
+    "pypinyin",
+    "watchdog",
+    "typer",
+    "srt",
+    "rapidfuzz",
+    "sherpa_onnx",
+    "gguf",
+    "PIL",
+    "PIL.Image",
+    "pystray",
 ]
 
-# # 对所有模块用 .py 源码而非 .pyc（猴子补丁 _get_module_collection_mode）
-# import PyInstaller.building.build_main as _bm
-# _bm._get_module_collection_mode = lambda md, n, na=False: _bm._ModuleCollectionMode.PY
+# 模型后端和托盘均包含延迟加载的本地库，显式收集能避免开发机可用、
+# 冻结后缺 DLL 的情况。
+for package in ("sherpa_onnx", "onnxruntime", "gguf", "PIL"):
+    try:
+        package_datas, package_binaries, package_hiddenimports = collect_all(package)
+        datas += package_datas
+        binaries += package_binaries
+        hiddenimports += package_hiddenimports
+    except Exception as exc:
+        print(f"[WARN] 无法显式收集 {package}: {exc}")
 
-a_1 = Analysis(
-    ['start_server.py'],
+analysis = Analysis(
+    ["start_capswriter.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['build_hook.py'],
-    excludes=['IPython',
-              'PySide6', 'PySide2', 'PyQt5',
-              'matplotlib', 'wx',
-              'funasr', 'pydantic', 'torch',
-              ],
+    runtime_hooks=["build_hook.py"],
+    excludes=[
+        "IPython",
+        "PySide6",
+        "PySide2",
+        "PyQt5",
+        "matplotlib",
+        "wx",
+        "funasr",
+        "pydantic",
+        "torch",
+    ],
     noarchive=True,
 )
 
-# 过滤掉从二进制依赖分析中收集的 DLL
-# 这些 DLL 是 PyInstaller 在分析 DLL 依赖时自动收集的
-# 我们排除从系统 CUDA 安装目录收集的 DLL（它们应该运行时从系统加载）
+# 排除开发机 CUDA 文件；DirectML 保留，作为上游支持的 Windows GPU 后端。
 filtered_binaries = []
-for name, src, type in a_1.binaries:
-    src_lower = src.lower() if isinstance(src, str) else ''
-    is_system_cuda_dll = (
-        '\\nvidia gpu computing toolkit\\cuda\\' in src_lower or
-        '\\nvidia\\cudnn\\' in src_lower or
-        ('\\cuda\\v' in src_lower and '\\bin\\' in src_lower)
+for name, source, binary_type in analysis.binaries:
+    source_lower = source.lower() if isinstance(source, str) else ""
+    is_system_cuda = (
+        "\\nvidia gpu computing toolkit\\cuda\\" in source_lower
+        or "\\nvidia\\cudnn\\" in source_lower
+        or ("\\cuda\\v" in source_lower and "\\bin\\" in source_lower)
     )
-    is_unwanted_onnx_dll = (
-        'onnxruntime_providers_cuda.dll' in name.lower() 
+    is_cuda_provider = "onnxruntime_providers_cuda.dll" in name.lower()
+    if not is_system_cuda and not is_cuda_provider:
+        filtered_binaries.append((name, source, binary_type))
+analysis.binaries = filtered_binaries
+
+# 配置和 core 源码保留在发行目录，方便用户直接编辑并跟随上游结构。
+private_modules = ["core", "config_client", "config_server", "LLM"]
+analysis.pure = [
+    entry
+    for entry in analysis.pure
+    if not any(
+        entry[0] == module or entry[0].startswith(module + ".")
+        for module in private_modules
     )
-
-    if not is_system_cuda_dll and not is_unwanted_onnx_dll:
-        filtered_binaries.append((name, src, type))
-    else:
-        reason = "环境 CUDA DLL" if is_system_cuda_dll else "冗余 ONNX DLL"
-        print(f"[INFO] 排除 {reason}: {name} (从 {src} 收集)")
-a_1.binaries = filtered_binaries
-
-a_2 = Analysis(
-    ['start_client.py'],
-    pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=['build_hook.py'],
-    excludes=['IPython',
-              'PySide6', 'PySide2', 'PyQt5',
-              'matplotlib', 'wx',
-              ],
-    noarchive=True,
-)
-
-# 客户端也过滤从系统 CUDA 目录收集的 DLL（保持一致性）
-filtered_binaries = []
-for name, src, type in a_2.binaries:
-    src_lower = src.lower() if isinstance(src, str) else ''
-    is_system_cuda_dll = (
-        '\\nvidia gpu computing toolkit\\cuda\\' in src_lower or
-        '\\nvidia\\cudnn\\' in src_lower or
-        ('\\cuda\\v' in src_lower and '\\bin\\' in src_lower)
+]
+analysis.datas = [
+    entry
+    for entry in analysis.datas
+    if not any(
+        entry[0].startswith(module + "/")
+        or entry[0].startswith(module + "\\")
+        or entry[0] in (module + ".py", module + ".pyc")
+        for module in private_modules
     )
-    is_unwanted_onnx_dll = (
-        'onnxruntime_providers_cuda.dll' in name.lower() or
-        'directml.dll' in name.lower()
-    )
+]
 
-    if not is_system_cuda_dll and not is_unwanted_onnx_dll:
-        filtered_binaries.append((name, src, type))
-    else:
-        reason = "环境 CUDA DLL" if is_system_cuda_dll else "冗余 ONNX DLL"
-        print(f"[INFO] 排除 {reason}: {name} (从 {src} 收集)")
-a_2.binaries = filtered_binaries
-
-
-# 排除不要打包的模块（这些将作为源文件复制）
-private_module = ['core', 'config_client', 'config_server', 'LLM', ]
-
-for which in (a_1, a_2):
-    filtered = []
-    for name, src, type in which.pure:
-        if not any(name == m or name.startswith(m + '.') for m in private_module):
-            filtered.append((name, src, type))
-    which.pure = filtered
-
-# noarchive 会将私有模块也编译成 .pyc 放进 datas，排除掉以保持源码运行
-for which in (a_1, a_2):
-    filtered = []
-    for name, src, type in which.datas:
-        is_private = any(
-            name.startswith(m + '/') or name.startswith(m + '\\') or name in (m + '.py', m + '.pyc')
-            for m in private_module
-        )
-        if not is_private:
-            filtered.append((name, src, type))
-    which.datas = filtered
-
-
-pyz_1 = PYZ(a_1.pure)
-pyz_2 = PYZ(a_2.pure)
-
-
-exe_1 = EXE(
-    pyz_1,
-    a_1.scripts,
+pyz = PYZ(analysis.pure)
+exe = EXE(
+    pyz,
+    analysis.scripts,
     [],
     exclude_binaries=True,
-    name='start_server',
+    name="CapsWriter",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\\\icon.ico'],
-    # 所有第三方依赖放入 internal 目录
-    contents_directory='internal',
-)
-exe_2 = EXE(
-    pyz_2,
-    a_2.scripts,
-    [],
-    exclude_binaries=True,
-    name='start_client',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=['assets\\\\icon.ico'],
-    # 所有第三方依赖放入 internal 目录
-    contents_directory='internal',
+    icon=["assets\\icon.ico"],
+    contents_directory="internal",
 )
 
-coll = COLLECT(
-    exe_1,
-    a_1.binaries,
-    a_1.datas,
-
-    exe_2,
-    a_2.binaries,
-    a_2.datas,
-
+collection = COLLECT(
+    exe,
+    analysis.binaries,
+    analysis.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='CapsWriter-Offline',
+    name="CapsWriter-Offline",
 )
 
-
-# 复制额外所需的文件（只复制用户自己写的文件）
-my_files = [
-    'config_client.py',
-    'config_server.py',
-    'core_server.py',
-    'core_client.py',
-    'hot.txt',
-    'hot-server.txt',
-    'hot-rule.txt',
-    'readme.md',
-    'LICENSE'
+extra_files = [
+    "config_client.py",
+    "config_server.py",
+    "hot.txt",
+    "hot-server.txt",
+    "hot-rule.txt",
+    "readme.md",
+    "LICENSE",
 ]
-my_folders = []     # 这里是要复制的文件夹
-dest_root = join('dist', basename(coll.name))
+extra_folders = ["assets", "core", "LLM", "docs"]
+destination_root = join("dist", basename(collection.name))
 
-# 复制文件夹中的文件
-for folder in my_folders:
+for folder in extra_folders:
     if not exists(folder):
         continue
-    for dirpath, dirnames, filenames in walk(folder):
+    for directory, _subdirectories, filenames in walk(folder):
         for filename in filenames:
-            src_file = join(dirpath, filename)
-            if exists(src_file):
-                my_files.append(src_file)
+            if filename.endswith((".pyc", ".pyo")) or "__pycache__" in directory:
+                continue
+            extra_files.append(join(directory, filename))
 
-# 执行文件复制到根目录（不是 internal）
-for file in my_files:
-    if not exists(file):
+for source in extra_files:
+    if not exists(source):
         continue
-    # 保持相对路径结构
-    rel_path = file.replace('\\', '/') if '\\' in file else file
-    dest_file = join(dest_root, rel_path)
-    dest_folder = dirname(dest_file)
-    makedirs(dest_folder, exist_ok=True)
-    copyfile(file, dest_file)
+    destination = join(destination_root, source)
+    makedirs(dirname(destination), exist_ok=True)
+    copyfile(source, destination)
 
-
-# 为 models 文件夹建立链接，免去复制大文件
-from platform import system
-from subprocess import run
-
-if system() == 'Windows':
-    link_folders = ['models', 'assets', 'core', 'LLM', 'docs', 'log']  
-    for folder in link_folders:
-        if not exists(folder):
-            continue
-        dest_folder = join(dest_root, folder)
-        if exists(dest_folder):
-            rmtree(dest_folder)
-        # 使用管理员权限运行的命令提示符来创建目录连接符
-        cmd = ['mklink', '/j', dest_folder, folder]
-        try:
-            run(cmd, shell=True, check=True)
-        except:
-            print(f'警告：无法创建目录连接符 {dest_folder}，请手动创建或复制文件夹')
+# 模型单独下载；发行包只创建明确的目标目录和说明。
+models_directory = join(destination_root, "models")
+makedirs(models_directory, exist_ok=True)
+model_note = join(models_directory, "请将模型文件放在此目录.txt")
+with open(model_note, "w", encoding="utf-8") as note:
+    note.write(
+        "模型下载与目录结构见 readme.md，或访问：\n"
+        "https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models\n"
+    )
