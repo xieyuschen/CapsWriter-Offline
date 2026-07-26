@@ -50,8 +50,7 @@ pip install -r requirements.txt
 python start_capswriter.py
 ```
 
-调试时仍可分别运行 `start_server.py` 和 `start_client.py`。只连接远程或
-Docker 服务端时，也可以单独运行客户端入口。
+调试时仍可分别运行 `start_server.py` 和 `start_client.py`。
 
 ## 打包
 
@@ -78,15 +77,6 @@ pyinstaller build.spec
 - `hot-en.txt`：英文热词
 - `hot-rule.txt`：自定义替换规则
 - `keywords.txt`：日记关键词
-
-## Docker 服务端
-
-需要把服务端放在 Docker 中时，单独启动客户端：
-
-```shell
-docker pull xieyuschen/capswriter:v1.0.0
-python start_client.py
-```
 
 上游项目与完整功能说明：
 [HaujetZhao/CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline)。
